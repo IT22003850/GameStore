@@ -1,87 +1,77 @@
 using System;
+using GameStore.Api.Data;
 using GameStore.Api.Dtos;
+using GameStore.Api.Entities;
+using GameStore.Api.Mapping;
+using Microsoft.EntityFrameworkCore;
 
 namespace GameStore.Api.Endpoints;
 
 public static class GamesEndpoints
 {
-    private static readonly List<GameDto> games = [
-    new (
-        1,
-        "Street fighter I",
-        "Fighting",
-        19.99M,
-        new DateOnly(1992,2,2)
-    ),
-    new (
-        2,
-        "Street fighter II",
-        "Fighting",
-        20.99M,
-        new DateOnly(1993,2,2)
-    ),
-    new (
-        3,
-        "Street fighter III",
-        "Fighting",
-        21.99M,
-        new DateOnly(1994,2,2)
-    )];
-
-
     public static WebApplication MapGamesEndpoints(this WebApplication app)
     {
         //Get / games
-        app.MapGet("games", () => games)
-        .WithParameterValidation();
+        app.MapGet("games", async (GameStoreContext dbContext) => 
+            await dbContext.Games
+                .Include(game => game.Genre)
+                .Select(game=> game.ToGameSummaryDto())
+                .AsNoTracking()
+                .ToListAsync())
+                .WithParameterValidation();
 
         //Get / games / 1
-        app.MapGet("games/{id}", (int id) => games.Find(game => game.Id == id))
+        app.MapGet("games/{id}", async (int id, GameStoreContext dbContext) =>
+        {
+            Game? game = await dbContext.Games.FindAsync(id);
+
+            return game is null ? 
+                Results.NotFound() : Results.Ok(game.ToGameDetailsDto());
+        })
         .WithParameterValidation();
 
         //POST / games
-        app.MapPost("games", (CreateGameDto newGame) =>
+        app.MapPost("games", async(CreateGameDto newGame, GameStoreContext dbContext) =>
         {
-            GameDto game = new(
-                games.Count + 1,
-                newGame.Name,
-                newGame.Genre,
-                newGame.Price,
-                newGame.ReleaseDate
-            );
+            Game game = newGame.ToEntity();
 
-            games.Add(game);
+            dbContext.Games.Add(game);
+            await dbContext.SaveChangesAsync();
 
-            return Results.Created($"/games/{game.Id}", game);
+            return Results.Created($"/games/{game.Id}", game.ToGameDetailsDto());
 
         })
         .WithParameterValidation();
 
         // PUT / games / {id}
-        app.MapPut("games/{id}", (int id, UpdateGameDto updatedGame) =>
+        app.MapPut("games/{id}", async(int id, UpdateGameDto updatedGame, GameStoreContext dbContext) =>
         {
-            var index = games.FindIndex(game => game.Id == id);
-            games[index] = new GameDto(
-                id,
-                updatedGame.Name,
-                updatedGame.Genre,
-                updatedGame.Price,
-                updatedGame.ReleaseDate
-            );
+            var existingGame = await dbContext.Games.FindAsync(id);
+
+            if (existingGame is null)
+            {
+                return Results.NotFound();
+            }
+            dbContext.Entry(existingGame)
+                .CurrentValues
+                .SetValues(updatedGame.ToEntity(id));
+
+            await dbContext.SaveChangesAsync();
 
             return Results.NoContent();
         })
         .WithParameterValidation();
 
         // DELETE / games / {id}
-        app.MapDelete("games/{id}", (int id) =>
+        app.MapDelete("games/{id}", async (int id, GameStoreContext dbContext) =>
         {
 
-            games.RemoveAll(game => game.Id == id);
+            await dbContext.Games
+                .Where(game => game.Id == id)
+                .ExecuteDeleteAsync();
 
             return Results.NoContent();
-        })
-        .WithParameterValidation();
+        });
 
         return app;
     }
